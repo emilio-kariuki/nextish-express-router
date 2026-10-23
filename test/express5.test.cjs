@@ -10,7 +10,7 @@ const { setTimeout: delay } = require("node:timers/promises");
 const root = path.resolve(__dirname, "..");
 const handler = value => `exports.GET = (_req, res) => res.send(${JSON.stringify(value)});`;
 
-async function fixture(t, files = {}) {
+async function fixture(t, files = {}, version = 5) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nextish-express5-"));
   const realDirectory = await fs.realpath(directory);
   const apiDir = path.join(directory, "api");
@@ -34,14 +34,14 @@ async function fixture(t, files = {}) {
   await fs.mkdir(apiDir);
   for (const dependency of ["express", "chokidar", "path-to-regexp", "zod"]) {
     const installed = dependency === "express"
-      ? path.dirname(require.resolve("express5/package.json"))
+      ? path.dirname(require.resolve(version === 5 ? "express5/package.json" : "express/package.json"))
       : await fs.realpath(path.join(root, "node_modules", dependency));
     await fs.symlink(installed, path.join(directory, "node_modules", dependency), "dir");
   }
   const isolatedRequire = createRequire(path.join(directory, "consumer.cjs"));
   const express = isolatedRequire("express");
   const core = isolatedRequire("nextish-express-router");
-  assert.match(isolatedRequire("express/package.json").version, /^5\./);
+  assert.equal(Number(isolatedRequire("express/package.json").version.split(".")[0]), version);
   assert.ok(isolatedRequire.resolve("nextish-express-router").startsWith(realDirectory + path.sep));
   const write = async (relative, source) => {
     const file = path.join(apiDir, relative);
@@ -97,6 +97,121 @@ async function expectText(request, url, text) {
   const response = await request(url);
   assert.equal(response.status, 200, url);
   assert.equal(await response.text(), text, url);
+}
+
+for (const version of [4, 5]) {
+  test(`Express ${version} route groups omit directory names and isolate inherited middleware`, { timeout: 10000 }, async t => {
+    const middleware = name => `exports.middleware = (req, _res, next) => {
+      (req.steps ??= []).push(${JSON.stringify(name)}); next();
+    };`;
+    const response = "(req, res) => res.json({ steps: req.steps, params: req.params })";
+    const f = await fixture(t, {
+      "middleware.cjs": middleware("root"),
+      "(public)/middleware.cjs": middleware("public"),
+      "(public)/route.cjs": `exports.GET = ${response};`,
+      "(public)/shared/open/route.cjs": `exports.GET = ${response};`,
+      "(private)/middleware.cjs": `exports.middleware = (req, res, next) => {
+        if (req.get('authorization') !== 'allowed') return res.sendStatus(401);
+        req.steps.push('private'); next();
+      };`,
+      "(private)/shared/(nested)/middleware.cjs": middleware("nested"),
+      "(private)/shared/(nested)/[id]/route.mjs": `export const GET = ${response};`,
+      "health/route.cjs": `exports.GET = ${response};`,
+    }, version);
+    const router = await f.mount({ routePrefix: "/v1" });
+    const request = await f.serve(f.express().use("/api", router));
+    for (const [url, steps] of [
+      ["/api/v1", ["root", "public"]],
+      ["/api/v1/shared/open", ["root", "public"]],
+      ["/api/v1/health", ["root"]],
+    ]) {
+      const result = await request(url);
+      assert.equal(result.status, 200, url);
+      assert.deepEqual(await result.json(), { steps, params: {} }, url);
+    }
+    assert.equal((await request("/api/v1/shared/42")).status, 401);
+    const allowed = await request("/api/v1/shared/42", { headers: { authorization: "allowed" } });
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(await allowed.json(), { steps: ["root", "private", "nested"], params: { id: "42" } });
+    for (const url of ["/api/v1/(public)/shared/open", "/api/v1/(private)/shared/42", "/shared/open"]) {
+      assert.equal((await request(url)).status, 404, url);
+    }
+    const routes = router.getRoutes();
+    assert.equal(routes.find(route => route.path === "/v1/shared/:id").file,
+      path.join(f.apiDir, "(private)/shared/(nested)/[id]/route.mjs"));
+    const document = f.core.generateOpenAPI(routes, { title: "Grouped routes", version: "1", servers: [{ url: "/api" }] });
+    assert.ok(document.paths["/v1/shared/{id}"].get);
+    assert.ok(document.paths["/v1/shared/open"].get);
+    assert.ok(Object.keys(document.paths).every(route => !route.includes("(")));
+  });
+
+  test(`Express ${version} route groups preserve static, dynamic, and catch-all priority`, { timeout: 10000 }, async t => {
+    const f = await fixture(t, {
+      "(root)/route.cjs": handler("root"),
+      "fixed/route.cjs": handler("static"),
+      "[id]/route.cjs": handler("dynamic"),
+      "[id]/fixed/route.cjs": handler("static child"),
+      "(dynamic)/[id]/[child]/route.cjs": handler("dynamic child"),
+      "(fallback)/(nested)/[...rest]/route.cjs": handler("required"),
+      "docs/(reference)/[[...rest]]/(handlers)/route.cjs": handler("optional"),
+    }, version);
+    const request = await f.serve(await f.mount({ routePrefix: "/v1" }));
+    for (const [url, expected] of [
+      ["/v1", "root"], ["/v1/fixed", "static"], ["/v1/value", "dynamic"],
+      ["/v1/value/fixed", "static child"], ["/v1/value/other", "dynamic child"],
+      ["/v1/a/b/c", "required"], ["/v1/docs", "optional"], ["/v1/docs/a/b", "optional"],
+    ]) {
+      await expectText(request, url, expected);
+    }
+  });
+
+  test(`Express ${version} route groups reject conflicting effective paths before importing modules`, { timeout: 10000 }, async t => {
+    for (const files of [
+      ["(public)/users/route.cjs", "(private)/users/route.mjs"],
+      ["users/[id]/route.cjs", "(admin)/users/[slug]/route.mjs"],
+      ["route.cjs", "(root)/(nested)/route.mjs"],
+    ]) {
+      const f = await fixture(t, Object.fromEntries(files.map(file => [file, 'throw new Error("conflicting module imported");'])), version);
+      await assert.rejects(f.mount(), error => {
+        assert.match(error.message, /^Route conflict:/);
+        for (const file of files) assert.ok(error.message.includes(path.join(f.apiDir, file)));
+        return true;
+      });
+      assert.deepEqual(f.logs, []);
+    }
+  });
+
+  test(`Express ${version} route groups reload middleware, recover from conflicts, and keep URLs on rename`, { timeout: 15000 }, async t => {
+    const middleware = value => `exports.middleware = (_req, res, next) => {
+      res.set('x-group', ${JSON.stringify(value)}); next();
+    };`;
+    const f = await fixture(t, {
+      "(admin)/middleware.cjs": middleware("old"),
+      "(admin)/users/route.cjs": handler("old"),
+      "(public)/status/route.cjs": handler("public"),
+    }, version);
+    f.polling();
+    const router = await f.mount({ watch: true });
+    const request = await f.serve(router);
+    await expectText(request, "/users", "old");
+    await update(f.logs, () => f.write("(admin)/middleware.cjs", middleware("new")));
+    assert.equal((await request("/users")).headers.get("x-group"), "new");
+    assert.equal((await request("/status")).headers.get("x-group"), null);
+    await update(f.logs, () => f.write("(admin)/users/route.cjs", handler("new")));
+    const original = router.getRoutes();
+    await update(f.logs, () => f.write("(other)/users/route.cjs", handler("conflict")), "Error reloading ");
+    assert.ok(f.logs.some(message => message.includes("Route conflict:") && message.includes("(admin)") && message.includes("(other)")));
+    assert.deepEqual(router.getRoutes(), original);
+    await expectText(request, "/users", "new");
+    await update(f.logs, () => f.remove("(other)"));
+    await update(f.logs, () => fs.rename(path.join(f.apiDir, "(admin)"), path.join(f.apiDir, "(staff)")));
+    await expectText(request, "/users", "new");
+    assert.equal((await request("/users")).headers.get("x-group"), "new");
+    assert.equal(router.getRoutes().find(route => route.path === "/users").file, path.join(f.apiDir, "(staff)/users/route.cjs"));
+    await update(f.logs, () => f.remove("(staff)/middleware.cjs"));
+    assert.equal((await request("/users")).headers.get("x-group"), null);
+    await expectText(request, "/status", "public");
+  });
 }
 
 test("Express 5 package discovery matches static, dynamic, catch-all, and numeric parameters", { timeout: 10000 }, async t => {

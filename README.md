@@ -5,6 +5,7 @@ Directory-based API routing for Express 4 and 5. Requires Node.js **22.13.0 or n
 The current implementation includes:
 
 - Per-method handlers, middleware, and validation.
+- Route groups using `(name)` directories that do not appear in URLs.
 - Shared middleware inherited by directory.
 - Conflict detection for route patterns and duplicate route or middleware files.
 - Optional Zod 4 validation with typed, parsed values in `req.validated`.
@@ -77,7 +78,23 @@ Routes are loaded from files named `route.<extension>`. Directory conventions ar
 | `api/files/[...rest]/route.js` | `/files/:rest(.+)` | `/files/*rest` |
 | `api/docs/[[...rest]]/route.js` | `/docs/:rest(*)?` | `/docs{/*rest}` |
 
-`[id]` captures one segment. `[...rest]` requires a nonempty remainder; `[[...rest]]` also matches `/docs` and `/docs/`. For `/files/one/two`, Express 4 supplies `req.params.rest` as `"one/two"`; Express 5 supplies `["one", "two"]`. Parameter names contain ASCII letters, digits, or underscores; numeric names are quoted automatically in Express 5 patterns. Static routes take priority over dynamic routes, then required catch-alls, then optional catch-alls. Hidden files and directories and symbolic links are skipped. These conventions do not include Next.js layouts or route groups.
+`[id]` captures one segment. `[...rest]` requires a nonempty remainder; `[[...rest]]` also matches `/docs` and `/docs/`. For `/files/one/two`, Express 4 supplies `req.params.rest` as `"one/two"`; Express 5 supplies `["one", "two"]`. Parameter names contain ASCII letters, digits, or underscores; numeric names are quoted automatically in Express 5 patterns. Static routes take priority over dynamic routes, then required catch-alls, then optional catch-alls. Hidden files and directories and symbolic links are skipped. Next.js layouts are not included.
+
+Wrap an entire directory name in parentheses to create a **route group**, as in Next.js. Group names organize files and are omitted from the URL:
+
+```text
+api/(public)/route.ts                  → /
+api/(public)/about/route.ts            → /about
+api/(admin)/middleware.ts              → middleware for routes inside (admin)
+api/(admin)/users/[id]/route.ts         → /users/:id
+api/(admin)/(reports)/stats/route.ts    → /stats
+```
+
+Groups can be nested or placed between ordinary, dynamic, and catch-all directories. They do not affect route priority. A route directly inside a group uses its parent's URL. Existing `routePrefix` and `app.use()` prefixes still apply.
+
+Middleware follows the physical folder tree: API-root middleware runs first, then ancestor middleware including each enclosing group's middleware. A group's middleware applies only to its descendants, even when another group has routes under the same URL prefix. Route manifests, OpenAPI paths, and route logs omit group names from URLs; manifest source filenames retain the complete filesystem path.
+
+Groups share the same URL namespace. For example, `(public)/users/route.js` and `(admin)/users/route.js` conflict because both map to `/users`, even if they export different HTTP methods. Renaming a group preserves its URLs; with `watch: true`, group routes and middleware participate in the same atomic reloads as ordinary directories.
 
 Each effective route pattern must come from one file per mount. For example, `users/[id]/route.js` conflicts with `users/[slug]/route.js`, and `route.ts` conflicts with `route.js` when both extensions are enabled, even if they export different methods. Conflicts report both files; case handling follows the receiving Express router. Static/dynamic/catch-all overlaps remain allowed. This check does not include routes registered by your application or separate mounts.
 

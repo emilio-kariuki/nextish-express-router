@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import express from "express";
 import chokidar from "chokidar";
-import { dirPathToRoute } from "./transform";
+import { dirPathToRoute, isRouteGroup } from "./transform";
 import { assertNoRouteConflicts } from "./conflicts";
 import { getHandlers, registerRouteHandlers } from "./handlers";
 import { createModuleLoader, readModuleRevision } from "./modules";
@@ -99,11 +99,13 @@ export async function mountDirectoryRoutes(
     const replacement = express.Router(routerOptions);
     const resource = replacement.route(fullRoute);
     const methods = registerRouteHandlers(resource, mod, file, inherited);
-    const specificity = path.relative(apiDir, path.dirname(file)).split(path.sep).filter(Boolean).map(segment => {
-      if (segment.startsWith("[[...")) return 3;
-      if (segment.startsWith("[...")) return 2;
-      return segment.startsWith("[") ? 1 : 0;
-    });
+    const specificity = path.relative(apiDir, path.dirname(file)).split(path.sep)
+      .filter(segment => segment && !isRouteGroup(segment))
+      .map(segment => {
+        if (segment.startsWith("[[...")) return 3;
+        if (segment.startsWith("[...")) return 2;
+        return segment.startsWith("[") ? 1 : 0;
+      });
     const routeModule = mod as RouteModule;
     const records = methods.map(method => {
       const value = method === "ALL"

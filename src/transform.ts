@@ -1,5 +1,9 @@
 import path from "path";
 
+export function isRouteGroup(segment: string): boolean {
+  return segment.startsWith("(") && segment.endsWith(")");
+}
+
 /** Convert a route file's directory into the receiving Express version's syntax. */
 export function dirPathToRoute(pagesDir: string, filePath: string, express5 = false): { route: string } {
   const relDir = path.relative(pagesDir, path.dirname(filePath));
@@ -7,7 +11,7 @@ export function dirPathToRoute(pagesDir: string, filePath: string, express5 = fa
     throw new Error(`Route file must be inside ${pagesDir}: ${filePath}`);
   }
 
-  const segments = relDir.split(path.sep).filter(Boolean);
+  const segments = relDir.split(path.sep).filter(segment => segment && !isRouteGroup(segment));
   const nameFor = (name: string) => express5 && /^\d/.test(name) ? JSON.stringify(name) : name;
   const transformedSegments = segments.map(seg => {
     const optionalCatchAll = seg.match(/^\[\[\.\.\.(\w+)\]\]$/);
