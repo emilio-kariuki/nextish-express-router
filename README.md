@@ -2,11 +2,30 @@
 
 Directory-based API routing for Express 4 and 5. Requires Node.js **22.13.0 or newer**.
 
+The current implementation includes:
+
+- Per-method handlers, middleware, and validation.
+- Shared middleware inherited by directory.
+- Conflict detection for route patterns and duplicate route or middleware files.
+- Optional Zod 4 validation with typed, parsed values in `req.validated`.
+- Route inspection through `getRoutes()` and OpenAPI 3.1 generation.
+- CommonJS and native ESM route loading on Express 4 and 5.
+- Atomic development reloads for routes, middleware, and eagerly imported local helpers.
+
+The source package is version **0.1.0** and is not currently available on the public npm registry. From a checkout of this repository, build an installable tarball:
+
 ```sh
-npm install nextish-express-router express@5
+pnpm install --frozen-lockfile
+npm pack
 ```
 
-Express 4 is also supported: install `express@4` to use that major version. The router uses your application's Express peer dependency.
+`npm pack` builds the package and creates `nextish-express-router-0.1.0.tgz`. In your application, install that file alongside Express:
+
+```sh
+npm install /path/to/nextish-express-router-0.1.0.tgz express@5
+```
+
+The router uses your application's Express peer dependency: Express **4.22.3 or newer within 4.x**, or **5.x**. Replace `express@5` with `express@4` above to use Express 4.
 
 For TypeScript, install matching declarations with `npm install --save-dev @types/express@5` for Express 5, or `npm install --save-dev @types/express@4` for Express 4.
 
@@ -20,12 +39,11 @@ Mount the API from your CommonJS server:
 
 ```js
 const express = require("express");
-const path = require("node:path");
 const { createNextishRouter } = require("nextish-express-router");
 
 async function main() {
   const app = express();
-  const api = await createNextishRouter(path.join(__dirname, "api"));
+  const api = await createNextishRouter();
   app.use("/api", api);
   app.listen(3000);
 }
@@ -37,6 +55,17 @@ main().catch(error => {
 ```
 
 `GET /api/hello` now returns JSON. The returned `NextishRouter` works anywhere an Express router does.
+
+With no argument, `createNextishRouter()` loads `./api`. These are alternative ways to choose the directory:
+
+```js
+await createNextishRouter(); // ./api
+await createNextishRouter("api"); // Same as the default
+await createNextishRouter("routes"); // ./routes
+await createNextishRouter({ apiDir: "routes", watch: true }); // Custom directory with watching
+```
+
+Relative paths resolve from `process.cwd()` (the working directory where you start Node), independently of the server file's location. Absolute paths are also supported. The included example uses an absolute path so its routes stay beside the source or compiled server.
 
 Routes are loaded from files named `route.<extension>`. Directory conventions are relative to `apiDir`:
 
@@ -182,9 +211,9 @@ Body schemas use `application/json`, and `docs.bodyRequired` controls the OpenAP
 
 The generator supports full-segment parameters and terminal catch-alls in either Express version. Optional catch-alls generate both base and wildcard paths. Wildcard parameters carry `x-nextish-catch-all: true`; OpenAPI tools may need custom handling for multiple path segments. Custom regex, mixed parameter segments, and other unsupported Express patterns fail clearly. `ALL` expands to OpenAPI's GET, PUT, POST, DELETE, OPTIONS, HEAD, PATCH, and TRACE operations. Explicit operation IDs gain `_<method>` for `ALL` and `_base` or `_catchAll` for optional variants. Duplicate operations, duplicate operation IDs, and equivalent templates with different parameter names are rejected, including when combining separate manifests.
 
-`createNextishRouter(options)` and `createNextishRouter(apiDir, options)` accept:
+`createNextishRouter()` uses the defaults. Customize them with `createNextishRouter(apiDir)`, `createNextishRouter(options)`, or `createNextishRouter(apiDir, options)`:
 
-- `apiDir`: directory to scan; default `"api"`, resolved relative to the working directory.
+- `apiDir`: absolute or relative directory to scan; default `"api"`, resolved relative to `process.cwd()`.
 - `extensions`: default `[".ts", ".js", ".tsx", ".jsx", ".cjs", ".mjs"]`; use only the extensions emitted by your build for compiled routes.
 - `routePrefix`: prefix added to every route; default `""`. It combines with the path passed to `app.use()`.
 - `watch`: reload route files, directory middleware, and their discovered local dependencies when they are added, changed, or removed; default `false`.
@@ -220,10 +249,12 @@ From this repository, run the included example with pnpm:
 
 ```sh
 pnpm install
-pnpm dev     # TypeScript development with watching
-pnpm build   # Emits dist/src and dist/example
-pnpm start   # Runs dist/example/server.js in production, without watching
-pnpm test    # Builds, then runs Node's test runner
+pnpm dev        # TypeScript development with watching
+pnpm build      # Emits dist/src and dist/example
+pnpm start      # Runs dist/example/server.js in production, without watching
+pnpm lint       # Checks code style
+pnpm typecheck  # Checks TypeScript without emitting files
+pnpm test       # Builds, then runs Node's test runner
 ```
 
 The example responds at `http://localhost:3000/api/blog`. Its POST accepts JSON such as `{"name":"Ada"}`; GET, PUT, PATCH, and DELETE require no name. The example is a request/validation demonstration and does not persist data.
