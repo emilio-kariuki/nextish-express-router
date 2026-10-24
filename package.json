@@ -30,6 +30,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "node --watch --import tsx example/server.ts",
     "start": "node -e \"process.env.NODE_ENV='production'; require('./dist/example/server.js')\"",
+    "todo:dev": "node --watch --import tsx example/todo/server.ts",
+    "todo:start": "node -e \"process.env.NODE_ENV='production'; require('./dist/example/todo/server.js')\"",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test",

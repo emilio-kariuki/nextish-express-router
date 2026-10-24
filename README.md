@@ -275,3 +275,5 @@ pnpm test       # Builds, then runs Node's test runner
 ```
 
 The example responds at `http://localhost:3000/api/blog`. Its POST accepts JSON such as `{"name":"Ada"}`; GET, PUT, PATCH, and DELETE require no name. The example is a request/validation demonstration and does not persist data.
+
+The larger [todo API example](example/todo/README.md) implements users, their projects, and project todos with complete CRUD flows, completion filtering, route groups, inherited middleware, Zod validation, and an OpenAPI endpoint. Run `npm run todo:dev` from the repository root, or `npm run build` followed by `npm run todo:start` for compiled JavaScript. It listens at `http://127.0.0.1:3001`, uses seeded in-memory data that resets on restart, and has no authentication.
