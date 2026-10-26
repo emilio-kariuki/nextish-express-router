@@ -176,7 +176,7 @@ test("Zod routes await async refinements and transformations", async t => {
   assert.equal((await denied.json()).issues[0].message, "Unknown token");
 });
 
-test("thrown transforms and empty rejections use the existing validation failure response", async t => {
+test("thrown transforms and empty rejections reach Express error middleware", async t => {
   let handled = false;
   const request = await serve(t, {
     POST: zodRoute({
@@ -189,9 +189,9 @@ test("thrown transforms and empty rejections use the existing validation failure
       handler: (_req, res) => { handled = true; res.end(); },
     }),
   });
-  for (const [mode, message] of [["throw", "Transform failed"], ["empty", "Validation failed"]]) {
+  for (const [mode, message] of [["throw", "Transform failed"], ["empty", "Rejected promise"]]) {
     const response = await request("/42", post({ mode }));
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), { error: message });
   }
   assert.equal(handled, false);

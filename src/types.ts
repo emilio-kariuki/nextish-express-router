@@ -84,7 +84,6 @@ export type RouteModule = Partial<Record<HttpMethod | Lowercase<HttpMethod>, Rou
   default?: RouteHandler | RouteDefinition;
   handler?: RouteHandler | RouteDefinition;
   middleware?: RouteHandler;
-  config?: Record<string, unknown>;
   validate?: RouteValidators;
   docs?: RouteDocumentation;
 };

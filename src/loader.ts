@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import express from "express";
+import type express from "express";
 import chokidar from "chokidar";
 import { dirPathToRoute, isRouteGroup } from "./transform";
 import { assertNoRouteConflicts } from "./conflicts";
@@ -10,7 +10,6 @@ import type { LoadedModule, ModuleLoadError, ModuleRevision } from "./modules";
 import type { CreateRouterOptions, RouteDefinition, RouteInfo, RouteModule, RouteMount } from "./types";
 
 const DEFAULT_EXT = [".ts", ".js", ".tsx", ".jsx", ".cjs", ".mjs"];
-const express5 = Number((require("express/package.json") as { version: string }).version.split(".")[0]) >= 5;
 const sameRevision = (a: ModuleRevision | null | undefined, b: ModuleRevision | null | undefined) =>
   a?.mtimeMs === b?.mtimeMs && a?.ctimeMs === b?.ctimeMs && a?.size === b?.size && a?.ino === b?.ino;
 
@@ -37,18 +36,27 @@ export async function mountDirectoryRoutes(
   const routeFilenames = new Set(extensions.map(ext => `route.${ext}`));
   const middlewareFilenames = new Set(extensions.map(ext => `middleware.${ext}`));
   const filenames = new Set([...routeFilenames, ...middlewareFilenames]);
-  const prefix = options.routePrefix ?? "";
+  const prefix = path.posix.join("/", options.routePrefix ?? "");
   const devMode = options.devMode ?? !!options.watch;
   const logger = options.logger ?? ((message: string) => console.log(message));
-  let parentRouter = ("settings" in appOrRouter
-    ? (express5 ? appOrRouter.router : appOrRouter._router)
-    : appOrRouter) as RouterInternals | undefined;
+  const app = ("settings" in appOrRouter ? appOrRouter : undefined) as
+    (express.Application & { lazyrouter?: () => void }) | undefined;
+  app?.lazyrouter?.();
+  const parentRouter = (app ? (app._router ?? app.router) : appOrRouter) as RouterInternals;
+  const express5 = !("process_params" in parentRouter);
   const routerOptions = {
-    caseSensitive: parentRouter?.caseSensitive ?? ("settings" in appOrRouter && appOrRouter.enabled("case sensitive routing")),
-    strict: parentRouter?.strict ?? ("settings" in appOrRouter && appOrRouter.enabled("strict routing")),
+    caseSensitive: parentRouter.caseSensitive ?? (app?.enabled("case sensitive routing") ?? false),
+    strict: parentRouter.strict ?? (app?.enabled("strict routing") ?? false),
   };
+  // Use the caller's layer factories with a detached stack for atomic publication.
+  const createRouter = () => ({
+    ...routerOptions,
+    stack: [] as express.Router["stack"],
+    route: parentRouter.route,
+    use: parentRouter.use,
+  });
   // Keep this mount's position even when it has no routes.
-  const anchor = express.Router().use((_req, _res, next) => next()).stack[0];
+  const anchor = createRouter().use((_req, _res, next) => next()).stack[0];
   let published = new Set([anchor]);
   const moduleLoader = createModuleLoader();
   let modules = new Map<string, LoadedModule>();
@@ -67,6 +75,12 @@ export async function mountDirectoryRoutes(
   let dependencyWatcher: ReturnType<typeof chokidar.watch> | undefined;
   let watchedDependencies = new Set<string>();
   const shutdown = new AbortController();
+
+  const report = (message: string) => {
+    // A failing diagnostic sink must not interrupt startup or background reloads.
+    try { logger(message); } catch { /* The mounted routes remain available. */ }
+  };
+  const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 
   const canonical = (file: string): string => {
     const absolute = path.resolve(file);
@@ -96,7 +110,7 @@ export async function mountDirectoryRoutes(
   };
 
   const buildFile = (file: string, fullRoute: string, mod: unknown, inherited: express.RequestHandler[]): MountedInfo => {
-    const replacement = express.Router(routerOptions);
+    const replacement = createRouter();
     const resource = replacement.route(fullRoute);
     const methods = registerRouteHandlers(resource, mod, file, inherited);
     const specificity = path.relative(apiDir, path.dirname(file)).split(path.sep)
@@ -119,11 +133,17 @@ export async function mountDirectoryRoutes(
       }
       const shared = routeModule.docs;
       const own = definition?.docs;
-      const docs = shared || own ? {
+      let docs = shared || own ? {
         ...shared, ...own,
         ...(shared?.schemas || own?.schemas ? { schemas: { ...shared?.schemas, ...own?.schemas } } : {}),
         ...(shared?.responses || own?.responses ? { responses: { ...shared?.responses, ...own?.responses } } : {}),
       } : undefined;
+      if (docs) {
+        try { docs = structuredClone(docs); }
+        catch (error) {
+          throw Object.assign(new TypeError(`Invalid docs export in ${file}: expected structured-cloneable data (${describe(error)})`), { cause: error });
+        }
+      }
       return { path: fullRoute, method: method as RouteInfo["method"], file, ...(docs ? { docs } : {}) };
     });
     return { file, layers: replacement.stack, route: fullRoute, methods, specificity, manifest: records };
@@ -138,14 +158,9 @@ export async function mountDirectoryRoutes(
       return a.file < b.file ? -1 : a.file > b.file ? 1 : 0;
     });
     const layers = [anchor, ...routes.flatMap(info => info.layers)];
-    const nextManifest = structuredClone(routes.flatMap(info => info.manifest));
-    logger("Loaded routes:\n" + routes.flatMap(info => info.methods.map(method => `${method.padEnd(6)} ${info.route}`)).join("\n"));
+    const nextManifest = routes.flatMap(info => info.manifest);
+    report("Loaded routes:\n" + routes.flatMap(info => info.methods.map(method => `${method.padEnd(6)} ${info.route}`)).join("\n"));
     if (closed) return;
-    if (!parentRouter) {
-      const app = appOrRouter as express.Application & { lazyrouter(): void };
-      app.lazyrouter();
-      parentRouter = app._router as RouterInternals;
-    }
     const stack = parentRouter.stack;
     const position = stack.indexOf(anchor);
     const start = position < 0 ? stack.length : position;
@@ -159,11 +174,6 @@ export async function mountDirectoryRoutes(
     manifest = nextManifest;
   };
 
-  const report = (message: string) => {
-    // A failing diagnostic sink must not create an unhandled background rejection.
-    try { logger(message); } catch { /* The mounted routes remain available. */ }
-  };
-  const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
   const waitForReady = (watcher: ReturnType<typeof chokidar.watch>) => new Promise<void>((resolve, reject) => {
     const finish = (error?: unknown) => {
       watcher.off("ready", ready);
@@ -285,12 +295,12 @@ export async function mountDirectoryRoutes(
     const files = scan(apiDir).sort();
     const routes = files.filter(file => routeFilenames.has(path.basename(file))).map(file => {
       let route = path.posix.join(prefix, dirPathToRoute(apiDir, file, express5).route);
-      route = express5
-        ? route.replace(/\/\{\*([^}]+)\}/g, (match, name: string, offset: number) => offset === 0 ? match : `{/*${name}}`)
-        : route.replace(/\\/g, "/");
+      if (express5) {
+        route = route.replace(/\/\{\*([^}]+)\}/g, (match, name: string, offset: number) => offset === 0 ? match : `{/*${name}}`);
+      }
       return { file, route };
     });
-    assertNoRouteConflicts(routes, routerOptions.caseSensitive);
+    assertNoRouteConflicts(routes, routerOptions.caseSensitive, createRouter);
     const middlewareFiles = new Map<string, string>();
     for (const file of files.filter(file => middlewareFilenames.has(path.basename(file)))) {
       const directory = path.dirname(file);

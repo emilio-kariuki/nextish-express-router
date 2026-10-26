@@ -78,7 +78,7 @@ Routes are loaded from files named `route.<extension>`. Directory conventions ar
 | `api/files/[...rest]/route.js` | `/files/:rest(.+)` | `/files/*rest` |
 | `api/docs/[[...rest]]/route.js` | `/docs/:rest(*)?` | `/docs{/*rest}` |
 
-`[id]` captures one segment. `[...rest]` requires a nonempty remainder; `[[...rest]]` also matches `/docs` and `/docs/`. For `/files/one/two`, Express 4 supplies `req.params.rest` as `"one/two"`; Express 5 supplies `["one", "two"]`. Parameter names contain ASCII letters, digits, or underscores; numeric names are quoted automatically in Express 5 patterns. Static routes take priority over dynamic routes, then required catch-alls, then optional catch-alls. Hidden files and directories and symbolic links are skipped. Next.js layouts are not included.
+`[id]` captures one segment. `[...rest]` requires a nonempty remainder; `[[...rest]]` also matches `/docs` and `/docs/`. For `/files/one/two`, Express 4 supplies `req.params.rest` as `"one/two"`; Express 5 supplies `["one", "two"]`. Parameter names contain ASCII letters, digits, or underscores; numeric names are quoted automatically in Express 5 patterns. Express 5 also accepts other names such as `[user-id]`; Express 4 rejects them clearly. Static folder names match literally, and Express 4 does not support `?` in folder names. Static routes take priority over dynamic routes, then required catch-alls, then optional catch-alls. Hidden files and directories and symbolic links are skipped. Next.js layouts are not included.
 
 Wrap an entire directory name in parentheses to create a **route group**, as in Next.js. Group names organize files and are omitted from the URL:
 
@@ -159,7 +159,7 @@ Directory middleware runs from the API root to the route's own directory, includ
 
 The request order is body parsers, `globalMiddleware`, directory middleware (root to leaf), route-module `middleware`, method `middleware`, shared validators (`params`, `query`, `body`), method validators (`params`, `query`, `body`), then the method's handlers. Middleware must call `next()` or send a response; returning a fulfilled promise alone does not advance the request.
 
-Each validator receives the whole Express request and returns `void` or `{ ok: boolean, status?: number, body?: unknown }`, directly or in a promise. Validators are awaited. `ok: false`, a throw, or a rejected promise stops the request with HTTP 400 by default; a returned failure can set `status` and `body`.
+Each validator receives the whole Express request and returns `void` or `{ ok: boolean, status?: number, body?: unknown }`, directly or in a promise. Validators are awaited. A returned `{ ok: false }` stops the request with HTTP 400 by default and can set `status` and `body`. A thrown or rejected validator error goes to `next(error)`, which Express answers with HTTP 500 by default.
 
 For schema validation with inferred output types, install the optional Zod 4 peer dependency:
 
@@ -202,7 +202,7 @@ For ordinary noncoercing body schemas, `zodRoute` documents a required body. An 
 
 For an absent HTTP body, the adapter treats Express 4's plain empty parser object as `undefined` while leaving `req.body` unchanged. This lets body-level optional values and defaults behave consistently across Express versions. An explicit JSON `{}`, a transfer-encoded body, or a nonempty middleware-supplied value remains a real input.
 
-Handlers and middleware can be async. Unexpected throws and rejections go to Express error middleware: register your `(error, req, res, next)` handler after mounting the API. Validation failures are handled separately as described above. Invalid route or middleware modules and conflicts reject initial router creation before routes are registered. A route module with no handler is invalid. Watched changes rebuild handler chains atomically; a failed reload is logged and keeps the last working routes and middleware until fixed. Removing a middleware file removes its middleware after a successful reload.
+Handlers and middleware can be async. Unexpected throws and rejections go to Express error middleware: register your `(error, req, res, next)` handler after mounting the API. Four-argument error handlers also work inside `globalMiddleware`, directory `middleware` files, and route handler arrays, and they keep their position in the chain. Validation failures are handled separately as described above. Invalid route or middleware modules and conflicts reject initial router creation before routes are registered. A route module with no handler is invalid. Watched changes rebuild handler chains atomically; a failed reload is logged and keeps the last working routes and middleware until fixed. Removing a middleware file removes its middleware after a successful reload.
 
 Inspect the current routes with `api.getRoutes()`. It returns detached records of `{ path, method, file, docs? }` from the last successful publication; modifying a record does not change routing. Failed reloads leave the manifest unchanged. Each record describes an exported method, or `ALL` for a fallback; implicit HEAD and automatic OPTIONS do not add records.
 
@@ -232,7 +232,7 @@ The generator supports full-segment parameters and terminal catch-alls in either
 
 - `apiDir`: absolute or relative directory to scan; default `"api"`, resolved relative to `process.cwd()`.
 - `extensions`: default `[".ts", ".js", ".tsx", ".jsx", ".cjs", ".mjs"]`; use only the extensions emitted by your build for compiled routes.
-- `routePrefix`: prefix added to every route; default `""`. It combines with the path passed to `app.use()`.
+- `routePrefix`: prefix added to every route; default `""`. A leading slash is optional. It combines with the path passed to `app.use()`.
 - `watch`: reload route files, directory middleware, and their discovered local dependencies when they are added, changed, or removed; default `false`.
 - `devMode`: refresh affected CommonJS and ESM modules when loading; defaults to the value of `watch`. Set `false` to retain cached modules even when watching.
 - `bodyParser`: mount `express.json()` and `express.urlencoded({ extended: true })`; default `true`. Set `false` to provide your own parsers before the API.
@@ -245,11 +245,13 @@ With `watch: true` and `devMode: true`, editing an eagerly imported local servic
 
 Synchronous CommonJS `require()` of a native ESM helper is not reloaded automatically: this loader cannot refresh Node's synchronous ESM cache. Use a native ESM route with `import` for ESM helpers that need reloading, or restart after changing them.
 
-Route modules may export `config` metadata, but it does not change router behavior. Public types include `CreateRouterOptions`, `HttpMethod`, `NextishRouter`, `RouteDefinition`, `RouteDocumentation`, `RouteHandler`, `RouteInfo`, `RouteMount`, `RouteModule`, `RouteValidator`, `RouteValidators`, `ValidationResult`, `JSONSchema`, and `OpenAPIOptions`. The optional `/zod` entry exports `zodRoute`, `ZodRouteSchemas`, `ZodRouteRequest`, `ZodRouteHandler`, and `ZodRouteOptions`.
+Public types include `CreateRouterOptions`, `HttpMethod`, `NextishRouter`, `RouteDefinition`, `RouteDocumentation`, `RouteHandler`, `RouteInfo`, `RouteMount`, `RouteModule`, `RouteValidator`, `RouteValidators`, `ValidationResult`, `JSONSchema`, and `OpenAPIOptions`. The optional `/zod` entry exports `zodRoute`, `ZodRouteSchemas`, `ZodRouteRequest`, `ZodRouteHandler`, and `ZodRouteOptions`.
 
 For direct mounting, `await mountDirectoryRoutes(appOrRouter, options)` returns a callable `RouteMount`: call `mount.getRoutes()` to inspect it and `await mount()` to clean up. It mounts routes onto an existing Express application or router; configure its body parsers and global middleware yourself. `bodyParser` and `globalMiddleware` are convenience options applied by `createNextishRouter`.
 
-Keep the returned router and call `await api.close()` during shutdown, or call the cleanup function returned by `mountDirectoryRoutes`. Cleanup stops watching and prevents late reload publication; it does not close your HTTP server or remove active handlers. Call `server.close()` separately. Node retains previously loaded ESM generations until process exit, so memory can grow during long development sessions; restart periodically. [The example server](example/server.ts) handles SIGINT, SIGTERM, and startup failures.
+Keep the returned router and call `await api.close()` during shutdown, or call the cleanup function returned by `mountDirectoryRoutes`. Cleanup stops watching and prevents late reload publication; it does not close your HTTP server or remove active handlers. Call `server.close()` separately. [The example server](example/server.ts) handles SIGINT, SIGTERM, and startup failures.
+
+**Limitations:** Route `docs` must be structured-cloneable plain data. ESM route modules reloaded in dev mode remain in Node's module cache until the process exits. Memory can grow during long watch sessions; restart periodically.
 
 The package's CommonJS build supports both `require("nextish-express-router")` and native ESM named imports such as `import { createNextishRouter } from "nextish-express-router"`. Route and middleware files may use CommonJS (`.cjs`, or `.js` in a CommonJS package) or native ESM (`.mjs`, or `.js` under `"type": "module"`). ESM top-level `await` is supported and finishes before the new routes are published.
 

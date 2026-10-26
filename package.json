@@ -44,8 +44,16 @@
     "directory-routing",
     "typescript"
   ],
-  "author": "",
+  "author": "Emilio Kariuki",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emilio-kariuki/nextish-express-router.git"
+  },
+  "bugs": {
+    "url": "https://github.com/emilio-kariuki/nextish-express-router/issues"
+  },
+  "homepage": "https://github.com/emilio-kariuki/nextish-express-router#readme",
   "dependencies": {
     "chokidar": "^4.0.3",
     "path-to-regexp": "^8.4.2"
@@ -66,7 +74,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/express": "^4.17.25",
-    "@types/node": "^20.19.43",
+    "@types/node": "^22.13.0",
     "eslint": "^10.13.0",
     "express": "^4.22.3",
     "express5": "npm:express@^5.3.0",

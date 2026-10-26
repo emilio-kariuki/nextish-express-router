@@ -214,8 +214,8 @@ test("route and directory middleware edits blocked by a conflict apply after its
 for (const kind of ["application", "router"]) {
   test(`conflict detection honors the caller Express ${kind}'s case sensitivity`, async t => {
     const f = await fixture(t, {
-      "users/:upper(ABC)/route.js": handler("upper"),
-      "users/:lower(abc)/route.js": handler("lower"),
+      "(upper)/users/ABC/route.js": handler("upper"),
+      "(lower)/users/abc/route.js": handler("lower"),
     });
     await assert.rejects(f.mount(kind === "application" ? express() : express.Router()), /Route conflict:/);
     const parent = kind === "application" ? express() : express.Router({ caseSensitive: true });

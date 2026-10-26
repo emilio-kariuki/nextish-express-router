@@ -157,9 +157,9 @@ test("method validator failures stop requests and preserve default and custom re
     for (const [mode, status, body] of [
       ["default", 400, { error: `Invalid ${name}` }],
       ["custom", 422, { failed: name }],
-      ["throw", 400, { error: `bad ${name}` }],
-      ["reject", 400, { error: `rejected ${name}` }],
-      ["empty rejection", 400, { error: "Validation failed" }],
+      ["throw", 503, { error: `bad ${name}` }],
+      ["reject", 503, { error: `rejected ${name}` }],
+      ["empty rejection", 503, { error: "Rejected promise" }],
     ]) {
       const response = await request(`/?fail=${name}&mode=${encodeURIComponent(mode)}`, { method: "POST" });
       assert.equal(response.status, status, `${name}: ${mode}`);

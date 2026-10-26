@@ -10,7 +10,7 @@ export function getHandlers(value: unknown, file: string, name: string): express
   if (parts.length === 0 || [...parts].some(part => typeof part !== "function")) {
     throw new TypeError(`Invalid ${name} export in ${file}: expected a function or a non-empty array of functions`);
   }
-  return (parts as express.RequestHandler[]).map(wrapAsync);
+  return (parts as express.RequestHandler[]).map(handler => wrapAsync(handler));
 }
 
 function getValidation(value: unknown, file: string, name: string): express.RequestHandler[] {
@@ -25,18 +25,14 @@ function getValidation(value: unknown, file: string, name: string): express.Requ
     }
   }
   return [wrapAsync(async (req, res, next) => {
-    try {
-      for (const part of VALIDATORS) {
-        const result = await validators[part]?.(req);
-        if (result && result.ok === false) {
-          res.status(result.status ?? 400).json(result.body ?? { error: `Invalid ${part}` });
-          return;
-        }
+    for (const part of VALIDATORS) {
+      const result = await validators[part]?.(req);
+      if (result && result.ok === false) {
+        res.status(result.status ?? 400).json(result.body ?? { error: `Invalid ${part}` });
+        return;
       }
-      next();
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : "Validation failed" });
     }
+    next();
   })];
 }
 
@@ -59,12 +55,17 @@ export function registerRouteHandlers(
     const definition = value !== null && typeof value === "object" && !Array.isArray(value)
       ? value as RouteDefinition
       : undefined;
-    return [
+    const middleware = [
       ...common,
       ...(definition?.middleware === undefined ? [] : getHandlers(definition.middleware, file, `${name}.middleware`)),
+    ];
+    return [
+      ...middleware.filter(handler => handler.length !== 4),
       ...sharedValidation,
       ...getValidation(definition?.validate, file, `${name}.validate`),
       ...getHandlers(definition === undefined ? value : definition.handler, file, definition ? `${name}.handler` : name),
+      // Express only visits error middleware after the failing handler.
+      ...middleware.filter(handler => handler.length === 4),
     ];
   };
   const methods: string[] = [];

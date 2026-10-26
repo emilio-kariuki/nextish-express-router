@@ -229,12 +229,13 @@ test("async params, query and body validators are awaited, stop on failure, and 
     for (const [suffix, status, body] of [
       ["", 400, { error: `Invalid ${name}` }],
       ["&custom=yes", 422, { failed: name }],
-      ["&throw=yes", 400, { error: `bad ${name}` }],
     ]) {
       const response = await request(`/value?fail=${name}${suffix}`, { method: "POST" });
       assert.equal(response.status, status);
       assert.deepEqual(await response.json(), body);
     }
+    const failure = await request(`/value?fail=${name}&throw=yes`, { method: "POST" });
+    assert.equal(failure.status, 500);
   }
   const response = await request("/value", {
     method: "POST",
@@ -306,29 +307,18 @@ for (const [failure, source] of [
   });
 }
 
-test("a publication error leaves routes unchanged, including on the next unrelated reload", { timeout: 10000 }, async t => {
+test("a throwing logger does not block startup or reloads", { timeout: 10000 }, async t => {
   const f = await fixture(t, { "route.js": handler("old") });
   const app = express();
-  let failPublish = true;
   const options = { apiDir: f.apiDir, watch: true, logger: message => {
-    if (failPublish && message.startsWith("Loaded routes:")) {
-      failPublish = false;
-      throw new Error("publication failed");
-    }
     f.logs.push(message);
+    throw new Error("logger failed");
   } };
-  await assert.rejects(mountDirectoryRoutes(app, options), /publication failed/);
-  assert.equal(app._router, undefined);
   f.disposers.push(await mountDirectoryRoutes(app, options));
   const request = await f.serve(app);
-  failPublish = true;
-  await update(f.logs, () => f.write("route.js", handler("rejected")), "Error reloading ");
   await expectText(request, "/", "old");
-  await update(f.logs, () => f.write("other/route.js", handler("other")));
-  await expectText(request, "/other", "other");
-  await expectText(request, "/", "old");
-  await update(f.logs, () => f.write("route.js", handler("recovered")));
-  await expectText(request, "/", "recovered");
+  await update(f.logs, () => f.write("route.js", handler("new")));
+  await expectText(request, "/", "new");
 });
 
 test("route specificity survives initialization, edits, additions and deletions", { timeout: 15000 }, async t => {

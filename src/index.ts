@@ -44,10 +44,14 @@ export async function createNextishRouter(
   }
 
   for (const middleware of options.globalMiddleware ?? []) {
-    router.use(wrapAsync(middleware));
+    if (middleware.length !== 4) router.use(wrapAsync(middleware));
   }
 
   const close = await mountDirectoryRoutes(router, { ...options, apiDir });
+
+  for (const middleware of options.globalMiddleware ?? []) {
+    if (middleware.length === 4) router.use(wrapAsync(middleware));
+  }
 
   return Object.assign(router, { close, getRoutes: close.getRoutes });
 }

@@ -3,11 +3,12 @@ import { pathToRegexp } from "path-to-regexp";
 
 export function assertNoRouteConflicts(
   routes: Iterable<{ file: string; route: string }>,
-  caseSensitive = false
+  caseSensitive = false,
+  createRouter: () => Pick<express.Router, "route" | "stack"> = () => express.Router({ caseSensitive })
 ): void {
   const patterns = new Map<string, { file: string; route: string }>();
   for (const entry of routes) {
-    const router = express.Router({ caseSensitive });
+    const router = createRouter();
     router.route(entry.route);
     const regexp = (router.stack[0].regexp as RegExp | undefined)
       ?? pathToRegexp(entry.route, { sensitive: caseSensitive }).regexp;
